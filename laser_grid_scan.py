@@ -14,14 +14,14 @@ PORT = 'COM10'
 BAUD = 250000
 
 # --- YENİ EKLENEN/GÜNCELLENEN AYARLAR ---
-GRID_SIZE_X = 15       # X eksenindeki nokta sayısı (Azimut)
-GRID_SIZE_Y = 15        # Y eksenindeki nokta sayısı (Elevasyon)
+GRID_SIZE_X = 15      # X eksenindeki nokta sayısı (Azimut)
+GRID_SIZE_Y = 15      # Y eksenindeki nokta sayısı (Elevasyon)
 
 SAFE_LIMIT_X = 80.0      # Fiziksel limit 135.7 mm -> Güvenli sınır +-134 mm
 SAFE_LIMIT_Y = 30.0       # Fiziksel limit 50.61 mm -> Güvenli sınır +-49 mm
 STEP_RES = 0.02         # Step motorun çözünürlüğü (mm) azimut=0.004mm VE elevasyon=0.005mm dolayısıyla bunların ekoku olan 0.02 seçildi
 
-FEEDRATE = 450
+FEEDRATE = 350
 HOMING_WAIT_SEC = 40
 INITIAL_DWELL_SEC = 5.0   # Offset başlangıç noktasına gidince beklenecek süre
 ROW_START_DWELL_SEC = 3.0 # Yeni satıra geçerken (uzun atlayış) sarsıntıyı önleme süresi
@@ -472,7 +472,7 @@ def main():
     # Planı ve offset koordinatlarını oluştur
     plan, start_x, start_y = build_scan_plan(GRID_SIZE_X, GRID_SIZE_Y, SAFE_LIMIT_X, SAFE_LIMIT_Y)
     
-    print(f"\n=== OFFSET: İlk baslangic noktasina gidiliyor (X={start_x:.3f}, Y={start_y:.3f}) ===")
+    print(f"\n=== OFFSET: ece İlk baslangic noktasina gidiliyor (X={start_x:.3f}, Y={start_y:.3f}) ===")
     send_and_wait(ser, f"G1 X{start_x:.3f} Y{start_y:.3f} F{FEEDRATE}")
     wait_move_done(ser)
     print(f"Offset'e ulaşıldı. Titreşimin sönmesi için {INITIAL_DWELL_SEC} sn bekleniyor...")
