@@ -14,8 +14,8 @@ PORT = 'COM10'
 BAUD = 250000
 
 # --- YENİ EKLENEN/GÜNCELLENEN AYARLAR ---
-GRID_SIZE_X = 30        # X eksenindeki nokta sayısı (Azimut)
-GRID_SIZE_Y = 30        # Y eksenindeki nokta sayısı (Elevasyon)
+GRID_SIZE_X = 15       # X eksenindeki nokta sayısı (Azimut)
+GRID_SIZE_Y = 15        # Y eksenindeki nokta sayısı (Elevasyon)
 
 SAFE_LIMIT_X = 80.0      # Fiziksel limit 135.7 mm -> Güvenli sınır +-134 mm
 SAFE_LIMIT_Y = 30.0       # Fiziksel limit 50.61 mm -> Güvenli sınır +-49 mm
