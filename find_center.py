@@ -1,28 +1,107 @@
 import time
-
 import cv2
 import numpy as np
 from vmbpy import OPENCV_PIXEL_FORMATS, PixelFormat, VmbSystem
 
 
-def find_laser_centroid(img):
+# ---------------------------------------------------------------
+# LAZER MERKEZİ TESPİTİ
+# ---------------------------------------------------------------
+def _get_speckle_blobs(img_f, rel_thr=0.5, min_area=3):
     """
-    Güçlü Gaussian Blur ile saçılmalara (speckle/diffraction) karşı dirençli
-    ROI + connected components + intensity weighted centroid algoritması.
+    Görüntüdeki her ayrık parlak beneği (speckle) tek tek tespit eder ve
+    her biri için (merkez_x, merkez_y, alan) döndürür.
+    """
+    blurred = cv2.GaussianBlur(img_f, (5, 5), 0)
+    thr = rel_thr * blurred.max()
+    mask = (blurred >= thr).astype(np.uint8)
+    n, _, stats, centroids = cv2.connectedComponentsWithStats(mask)
+
+    blobs = []
+    for i in range(1, n):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            cx, cy = centroids[i]
+            blobs.append((float(cx), float(cy), float(area)))
+    return blobs
+
+
+def _count_speckles(img_f, rel_thr=0.5, min_area=3):
+    """
+    Görüntüdeki ayrık parlak nokta (speckle) sayısını sayar.
+    Diffraction paterni oluştuğunda tek bir blob yerine onlarca ayrı
+    parlak beneğe bölünür; bu fonksiyon bunu tespit etmek için kullanılır.
+    """
+    return len(_get_speckle_blobs(img_f, rel_thr=rel_thr, min_area=min_area))
+
+
+def _robust_envelope_center(blobs, trim_factor=2.5, min_keep_ratio=0.5, max_iter=4):
+    """
+    Diffraction paterninin ana (yoğun) beneğinden oluşan bulutunun merkezini
+    bulur. Sağ üst köşedeki sensör yansıması, alt sol köşedeki fringe deseni
+    gibi ANA BULUTTAN UZAK, TEKİL parlak lekelerin merkezi bozmasını
+    önlemek için medyan tabanlı, aykırı-değer eleyen (robust) bir yöntem
+    kullanır:
+
+      1) Başlangıç tahmini olarak tüm benek merkezlerinin MEDYANI alınır
+         (medyan, ortalamanın aksine birkaç uzak aykırı değerden neredeyse
+         hiç etkilenmez).
+      2) Bu tahmine olan uzaklıklara bakılır, medyan uzaklığın
+         `trim_factor` katından uzak olan benekler (yani ana bulutun
+         parçası olmayan tekil lekeler) elenir.
+      3) Kalan beneklerin alan-ağırlıklı ortalaması ile merkez güncellenir.
+      4) Birkaç kez tekrarlanarak merkez stabilize edilir.
+
+    Döndürür: (cx, cy, ana_bulutun_yaricapi)
+    """
+    pts = np.array([(b[0], b[1]) for b in blobs], dtype=np.float64)
+    weights = np.array([b[2] for b in blobs], dtype=np.float64)
+
+    c = np.median(pts, axis=0)
+    keep = np.ones(len(pts), dtype=bool)
+
+    for _ in range(max_iter):
+        dists = np.linalg.norm(pts - c, axis=1)
+        med_dist = np.median(dists)
+        if med_dist <= 0:
+            break
+
+        new_keep = dists <= (med_dist * trim_factor)
+        # Cok fazla benegi elemeyelim (guvenlik)
+        if new_keep.sum() < max(4, int(len(pts) * min_keep_ratio)):
+            break
+
+        keep = new_keep
+        pts_k = pts[keep]
+        w_k = weights[keep]
+        c_new = (pts_k * w_k[:, None]).sum(axis=0) / w_k.sum()
+
+        if np.linalg.norm(c_new - c) < 0.5:
+            c = c_new
+            break
+        c = c_new
+
+    dists = np.linalg.norm(pts - c, axis=1)
+    kept_dists = dists[keep] if keep.any() else dists
+    envelope_radius = float(np.percentile(kept_dists, 90)) if len(kept_dists) else 0.0
+
+    return float(c[0]), float(c[1]), envelope_radius
+
+
+def _find_simple_laser_centroid(img):
+    """
+    ESKİ ALGORİTMA (diffraction YOKKEN kullanılır - tek nokta lazer).
+    Güçlü Gaussian Blur ile saçılmalara karşı dirençli ROI + connected
+    components + intensity weighted centroid algoritması.
     """
     img_f = img.astype(np.float32)
 
-    # 1. ADIM: Saçılmaları birleştirmek için geçici olarak yoğun bir Blur uygula
-    # Bu blur sadece "kabaca en yoğun bölgeyi (dağın zirvesini)" bulmak içindir.
     blurred_for_max = cv2.GaussianBlur(img_f, (41, 41), 0)
-    
-    # En parlak noktayı şimdi bu bulanıklaştırılmış görüntüde arıyoruz
     _, max_val, _, max_loc = cv2.minMaxLoc(blurred_for_max)
     if max_val <= 0:
         raise RuntimeError("Lazer noktasi bulunamadi.")
 
-    # 2. ADIM: Saçılmaları da kapsayabilmesi için ROI boyutunu büyütüyoruz (örn: 60)
-    roi_size = 60 
+    roi_size = 60
     x0, y0 = max_loc
     x1 = max(0, x0 - roi_size)
     x2 = min(img.shape[1], x0 + roi_size + 1)
@@ -30,36 +109,138 @@ def find_laser_centroid(img):
     y2 = min(img.shape[0], y0 + roi_size + 1)
 
     roi = img_f[y1:y2, x1:x2]
-    
-    # ROI üzerinde hesaplama yapmadan önce hafif bir gürültü temizleme
     roi = cv2.GaussianBlur(roi, (5, 5), 0)
 
-    # 3. ADIM: Eşikleme (Threshold). Çok düşük yaparsak saçılmalar hesabı bozar, 
-    # 0.5 ile 0.7 arası idealdir.
     thr = 0.5 * roi.max()
     binary = (roi >= thr).astype("uint8")
 
-    # 4. ADIM: Connected Components
     n, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
     if n <= 1:
         raise RuntimeError("Lazer blob'u bulunamadi.")
 
-    # En büyük alanı (arka plan hariç) seç
     idx = 1 + stats[1:, cv2.CC_STAT_AREA].argmax()
     mask = labels == idx
 
-    # 5. ADIM: Yoğunluk Ağırlıklı Merkez (Intensity Weighted Centroid) Hesabı
     ys, xs = mask.nonzero()
     w = roi[ys, xs]
     weight_sum = w.sum()
-    
+
     if weight_sum <= 0:
         raise RuntimeError("Lazer centroid hesabi yapilamadi.")
 
     cx = (xs * w).sum() / weight_sum + x1
     cy = (ys * w).sum() / weight_sum + y1
-    
+
     return float(cx), float(cy)
+
+
+def _find_diffraction_center(img):
+    """
+    YENİ ALGORİTMA (diffraction paterni VARKEN kullanılır).
+
+    Diffraction oluştuğunda gerçek merkez, en parlak beneğin olduğu yer
+    DEĞİL; paternin tam ortasındaki, çevresi parlak fakat kendisi KARANLIK
+    olan sönümlenme noktasıdır (fotoğrafta gördüğünüz o küçük siyah nokta).
+
+    Adımlar:
+      1) `_robust_envelope_center` ile, uzaktaki tekil parlak lekelerden
+         etkilenmeyen, ana speckle bulutunun GÜVENİLİR kaba merkezini bul.
+      2) Bu merkezin etrafında (bulutun tipik yarıçapına göre ölçeklenmiş)
+         küçük bir pencere içinde, "parlak çevre + karanlık iç" yapısına
+         uyan bölgeyi ara ve o bölgenin yoğunluk-ağırlıklı merkezini
+         gerçek merkez olarak döndür.
+    """
+    img_f = img.astype(np.float32)
+
+    blobs = _get_speckle_blobs(img_f)
+    if len(blobs) < 4:
+        raise RuntimeError("Diffraction merkezi icin yeterli benek yok.")
+
+    cx_coarse, cy_coarse, env_radius = _robust_envelope_center(blobs)
+    if env_radius <= 0:
+        env_radius = 60.0
+
+    # 2) Kaba merkezin etrafinda, bulutun tipik yaricapina gore olceklenmis
+    #    kucuk bir pencerede karanlik noktayi ara.
+    search_r = max(15, int(env_radius * 0.4))
+    x0 = max(0, int(cx_coarse - search_r))
+    x1 = min(img.shape[1], int(cx_coarse + search_r + 1))
+    y0 = max(0, int(cy_coarse - search_r))
+    y1 = min(img.shape[0], int(cy_coarse + search_r + 1))
+
+    sub = img_f[y0:y1, x0:x1]
+
+    # "Karanlik delik" tespiti: sadece en karanlik pikseli aramak, kenar/
+    # arka plan gibi zaten karanlik olan bolgeleri de yanlislikla secebilir.
+    # Bunun yerine, her pikselin GENIS cevresindeki ortalama parlakligi
+    # (buyuk blur) kendi degeriyle (kucuk blur) kiyaslayip, "cevresi
+    # belirgin sekilde parlak ama kendisi karanlik" olan gercek deligi
+    # ariyoruz. Kenar/arka plan bolgelerinde hem gecis hem cevre karanlik
+    # oldugundan bu fark orada yuksek cikmaz; delik yalnizca patern icinde,
+    # parlak halkanin tam ortasinda yuksek fark uretir.
+    small_blur = cv2.GaussianBlur(sub, (5, 5), 0)
+    large_blur = cv2.GaussianBlur(sub, (31, 31), 0)
+
+    if large_blur.max() <= 0:
+        return cx_coarse, cy_coarse
+
+    # Sadece cevresi zaten yeterince parlak olan bolgelerde ariyoruz;
+    # aksi halde sonucta karanlik olan bolgeler (arka plan) de aday olur.
+    valid = large_blur >= (0.35 * large_blur.max())
+    if not valid.any():
+        return cx_coarse, cy_coarse
+
+    diff = large_blur - small_blur
+    diff_masked = np.where(valid, diff, -np.inf)
+
+    peak_val = diff_masked.max()
+    if not np.isfinite(peak_val) or peak_val <= 0:
+        return cx_coarse, cy_coarse
+
+    # Tepe degerin bir kismina yakin butun pikselleri toplayip agirlikli
+    # merkezini al (tek piksele degil, delik bolgesinin butunune bakariz).
+    thr_dark = 0.7 * peak_val
+    dark_mask = diff_masked >= thr_dark
+
+    ys, xs = np.nonzero(dark_mask)
+    if len(xs) == 0:
+        return cx_coarse, cy_coarse
+
+    w = diff_masked[ys, xs]
+    cx = (xs * w).sum() / w.sum() + x0
+    cy = (ys * w).sum() / w.sum() + y0
+
+    return float(cx), float(cy)
+
+
+def find_laser_centroid(img, speckle_threshold=6):
+    """
+    Ana merkez tespit fonksiyonu.
+
+    Önce görüntüde diffraction (kırınım) paterni oluşup oluşmadığına bakar
+    (ayrı ayrı parlak benek sayısına göre):
+      - Diffraction VARSA -> _find_diffraction_center()
+        (paternin ortasındaki siyah noktayı bulan, uzak aykırı parlak
+        lekelere dayanıklı yöntem) kullanılır.
+      - Diffraction YOKSA (temiz tek nokta lazer) -> eski
+        _find_simple_laser_centroid() kullanılır.
+
+    speckle_threshold: Diffraction kabul edilmesi için gereken minimum
+    ayrık parlak beneği sayısı. Sahada gerçek verilerle test edip
+    ihtiyaca göre 4-10 arası ayarlayabilirsiniz.
+    """
+    img_f = img.astype(np.float32)
+    num_speckles = _count_speckles(img_f)
+
+    if num_speckles >= speckle_threshold:
+        try:
+            return _find_diffraction_center(img)
+        except RuntimeError:
+            # Diffraction merkez bulma başarısız olursa eski yönteme geri dön
+            return _find_simple_laser_centroid(img)
+    else:
+        return _find_simple_laser_centroid(img)
+
 
 class VimbaCamera:
     def __init__(self):

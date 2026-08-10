@@ -59,4 +59,4 @@ The script feeds the measured laser pixel coordinates ($x_{pixel}, y_{pixel}$) i
 The script includes a custom `cv2_imwrite_utf8` wrapper function to bypass a known OpenCV C++ bug on Windows that prevents saving images to directories containing Unicode (Non-ASCII) characters.
 
 ---
-*Developed for high-precision Electro-Optical Engineering and R&D applications.*
+*Developed for high-precision Electro-Optical Engineering and R&D applications*
