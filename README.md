@@ -58,5 +58,12 @@ The script feeds the measured laser pixel coordinates ($x_{pixel}, y_{pixel}$) i
 ## Notes on OpenCV Windows Bug
 The script includes a custom `cv2_imwrite_utf8` wrapper function to bypass a known OpenCV C++ bug on Windows that prevents saving images to directories containing Unicode (Non-ASCII) characters.
 
+## 📄 Reports & Documentation
+
+- **`Gimbal_Distorsiyon_Detaylı_Proje_Raporu.docx` / `.pdf`** — The full, up-to-date project report. Documents the complete calibration methodology, combining the checkerboard baseline with the gimbal + laser scanning approach described above.
+- **`Checkerboard_Kalibrasyon_Sunum.pptx`** — Presentation covering the classical checkerboard (Zhang's method) calibration used to determine the camera's intrinsic parameters before the gimbal-based system was introduced. Includes the algorithm explanation, measurements, and comparisons.
+- **`Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`** — General overview presentation of the gimbal-based distortion measurement setup: hardware used, measurements collected, and proposed solutions to encountered issues.
+- **`HeNe_lazer_sonrası_ve_karsilasilan_hatalar.pptx`** — Discusses the likely causes of a systematic error identified in the setup, potential code- and hardware-level fixes, and the switch to a HeNe laser. Prepared by Ece Salman & Ekin Naz Partal.
+- **`gimbal_system_visualization.py`** — A prototype script that plots the gimbal's 3D motion range, useful for visualizing the physical scanning envelope.
 ---
 *Developed for high-precision Electro-Optical Engineering and R&D applications*
