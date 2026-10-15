@@ -76,6 +76,7 @@ Betik, Windows işletim sisteminde OpenCV'nin bilinen bir C++ hatasını aşmak 
 - **`Checkerboard_Kalibrasyon_Sunum.pptx`** — Gimbal tabanlı sisteme geçilmeden önce, kameranın içsel parametrelerini belirlemek için kullanılan klasik satranç tahtası (Zhang yöntemi) kalibrasyonunu anlatan sunum. Yöntemin algoritması, alınan ölçümler ve elde edilen sonuçların karşılaştırmaları bu sunumda yer alır.
 - **`Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`** — Gimbal tabanlı distorsiyon ölçüm düzeneğinin genel hatlarını anlatan sunum: kullanılan cihazlar, alınan ölçümler ve karşılaşılan sorunlara yönelik öneriler bu sunumda özetlenmiştir.
 - **`HeNe_lazer_sonrası_ve_karsilasilan_hatalar.pptx`** — Düzenekte fark edilen sistemsel hatanın olası kaynaklarını, kod ve donanım tarafında yapılabilecek değişiklikleri ve daha kararlı bir ölçüm için geçilen HeNe lazerini anlatan sunum. Hazırlayanlar: Ece Salman & Ekin Naz Partal.
+- **`HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`** — HeNe 30989 ile fiber optik kuplaj ve ışın profillerinin (Gaussian, top-hat, donut) incelenmesi, M44L01 (multimode) ve P1-630A-FC-2 (single-mode) fiberlerin karşılaştırılması ve laboratuvar uygulama planını içeren teknik rapor.
 - **`gimbal_system_visualization.py`** — Gimbal'in hareket aralığını 3 boyutlu olarak çizerek, fiziksel tarama sınırlarının görselleştirilmesini ve kafada canlandırılmasını kolaylaştıran bir prototip betik.
 
 ---
@@ -156,6 +157,7 @@ The script includes a custom `cv2_imwrite_utf8` wrapper function to bypass a kno
 - **`Checkerboard_Kalibrasyon_Sunum.pptx`** — Presentation covering the classical checkerboard (Zhang's method) calibration used to determine the camera's intrinsic parameters before the gimbal-based system was introduced. Includes the algorithm explanation, measurements, and comparisons.
 - **`Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`** — General overview presentation of the gimbal-based distortion measurement setup: hardware used, measurements collected, and proposed solutions to encountered issues.
 - **`HeNe_lazer_sonrası_ve_karsilasilan_hatalar.pptx`** — Discusses the likely causes of a systematic error identified in the setup, potential code- and hardware-level fixes, and the switch to a HeNe laser. Prepared by Ece Salman & Ekin Naz Partal.
+- **`HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`** — Technical report on HeNe 30989 fiber optical coupling and beam profile characterization (Gaussian, top-hat, donut modes), comparing M44L01 multimode and P1-630A-FC-2 single-mode fibers with laboratory implementation plan.
 - **`gimbal_system_visualization.py`** — A prototype script that plots the gimbal's 3D motion range, useful for visualizing the physical scanning envelope.
 
 ---
