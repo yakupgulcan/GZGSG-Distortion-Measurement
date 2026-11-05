@@ -433,11 +433,12 @@ def project(params, theta_x, theta_y):
     R, _ = cv2.Rodrigues(np.array([rx, ry, rz], dtype=np.float64))
     T = np.array([tx, ty, tz], dtype=np.float64)
 
-    # 1. Gimbal 3B ışın doğrultusu (Gimbal referans koordinatları)
-    rays = np.stack([np.tan(theta_x), np.tan(theta_y), np.ones_like(theta_x)], axis=-1)
+    # 1. Pinhole 3B konumu (Gimbal referans koordinatlarında, mm cinsinden)
+    # Z_gimbal mesafesi NOMINAL_DISTANCE_MM (~63-120 mm) baz alınır
+    p_gimbal = NOMINAL_DISTANCE_MM * np.stack([np.tan(theta_x), np.tan(theta_y), np.ones_like(theta_x)], axis=-1)
 
-    # 2. Kamera koordinat sistemine dönüşüm: P_cam = R @ P_gimbal + T
-    p_cam = (R @ rays.T).T + T
+    # 2. Kamera koordinat sistemine dönüşüm: P_cam = R @ P_gimbal + T (her iki taraf da mm)
+    p_cam = (R @ p_gimbal.T).T + T
 
     # 3. Perspektif izdüşüm (Normalize koordinatlar: x' = X_c/Z_c, y' = Y_c/Z_c)
     Z_c = p_cam[:, 2]
@@ -483,7 +484,7 @@ def fit_camera_params(results):
         2182.0, -2182.0, 1024.0, 1024.0,   # Odak ve optik merkez
         0.0, 0.0, 0.0, 0.0,                # k1, k2, p1, p2
         0.0, 0.0, 0.0,                     # rx, ry, rz (Rotasyon)
-        0.0, 0.0, NOMINAL_DISTANCE_MM      # tx, ty, tz (Mesafe mm)
+        0.0, 0.0, 0.0                      # tx, ty, tz (mm sapma)
     ]
 
     # Fiziksel parametre sınırları
@@ -491,13 +492,13 @@ def fit_camera_params(results):
         800.0, -4000.0, 700.0, 700.0,
         -5.0, -10.0, -0.05, -0.05,
         -np.pi/4, -np.pi/4, -np.pi/4,
-        -150.0, -150.0, 20.0
+        -60.0, -60.0, -60.0
     ]
     upper = [
         4000.0, -800.0, 1350.0, 1350.0,
         5.0, 10.0, 0.05, 0.05,
         np.pi/4, np.pi/4, np.pi/4,
-        150.0, 150.0, 350.0
+        60.0, 60.0, 60.0
     ]
 
     # 1. Aşama: Aykırı noktalara (outlier) karşı dirençli Soft-L1 optimizasyonu (TRF)
