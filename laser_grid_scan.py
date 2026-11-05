@@ -13,29 +13,32 @@ from datetime import datetime
 PORT = 'COM10'
 BAUD = 250000
 
-# --- YENİ EKLENEN/GÜNCELLENEN AYARLAR ---
-GRID_SIZE_X = 15      # X eksenindeki nokta sayısı (Azimut)
-GRID_SIZE_Y = 15      # Y eksenindeki nokta sayısı (Elevasyon)
+# --- IZGARA VE MEKANİK AYARLAR ---
+GRID_SIZE_X = 7      # X eksenindeki nokta sayısı (Azimut)
+GRID_SIZE_Y = 7      # Y eksenindeki nokta sayısı (Elevasyon)
 
-SAFE_LIMIT_X = 80.0      # Fiziksel limit 135.7 mm -> Güvenli sınır +-134 mm
+SAFE_LIMIT_X = 80.0       # Fiziksel limit 135.7 mm -> Güvenli sınır +-134 mm
 SAFE_LIMIT_Y = 30.0       # Fiziksel limit 50.61 mm -> Güvenli sınır +-49 mm
-STEP_RES = 0.02         # Step motorun çözünürlüğü (mm) azimut=0.004mm VE elevasyon=0.005mm dolayısıyla bunların ekoku olan 0.02 seçildi
+STEP_RES = 0.02          # Step motorun çözünürlüğü (mm)
 
 FEEDRATE = 300
 HOMING_WAIT_SEC = 40
-INITIAL_DWELL_SEC = 5.0   # Offset başlangıç noktasına gidince beklenecek süre
-ROW_START_DWELL_SEC = 3.0 # Yeni satıra geçerken (uzun atlayış) sarsıntıyı önleme süresi
-DWELL_SEC = 0.7           # Normal ızgara adımlarında (kısa adım) bekleme süresi
-# ----------------------------------------
+INITIAL_DWELL_SEC = 5.0    # Offset başlangıç noktasına gidince beklenecek süre
+ROW_START_DWELL_SEC = 3.0  # Yeni satıra geçerken (uzun atlayış) bekleme süresi
+DWELL_SEC = 0.7            # Normal ızgara adımlarında bekleme süresi
 
-DEG_PER_MM_X = 1.0 / 5.0     # azimut
-DEG_PER_MM_Y = 1.0 / 2.37    # elevasyon
+DEG_PER_MM_X = 1.0 / 5.0      # azimut (0.2 deg/mm)
+DEG_PER_MM_Y = 1.0 / 2.37     # elevasyon (~0.422 deg/mm)
 
-# Dosyanın bulunduğu klasörü mutlak olarak bul (Nerede çalıştırılırsa çalıştırılsın klasör doğru yere açılır)
+# --- AYDINLIK ORTAM VE AKILLI TAKİP (ROI) AYARLARI ---
+SEARCH_RADIUS = 160           # Lazerin etrafındaki dinamik arama penceresi (piksel)
+MIN_CONTRAST = 10.0           # Minimum yerel kontrast eşiği (DN)
+OUTLIER_ERROR_THRESH_PX = 6.0 # Kalibrasyon fitinde aykırı sayılacak maksimum piksel hatası
+# ---------------------------------------------------------------------
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 formatted_time_stamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
-# Her yeni ölçümü "olcum_30x30_tarih_Y-A-G_S-D-S" şeklinde yeni bir klasöre kaydet
 SAVE_DIR = os.path.join(BASE_DIR, f"olcum_{GRID_SIZE_X}x{GRID_SIZE_Y}_tarih_{formatted_time_stamp}")
 print(f"[*] Kayıt Klasörü: {SAVE_DIR}")
 
@@ -44,37 +47,24 @@ print(f"[*] Kayıt Klasörü: {SAVE_DIR}")
 # GIMBAL (Marlin / G-code) YARDIMCI FONKSİYONLARI
 # ---------------------------------------------------------------
 def send_and_wait(ser, cmd):
-    """
-    Komutu göndermeden önce seri port tamponunu (buffer) temizler,
-    böylece eski/bayat 'ok' mesajlarını okumayı engeller. Gerçek 'ok' 
-    gelene kadar Python'u kesin olarak bloklar.
-    """
     ser.reset_input_buffer()
     ser.write((cmd + '\n').encode())
     ser.flush()
     
     while True:
         line = ser.readline().decode('utf-8', errors='ignore').strip()
-        
-        # Gelen yanıt boş değilse ve M114 posizyon verisi içeriyorsa ekrana bas
         if line and line.startswith("X:"):
             print(f"  [M114 Gimbal Pos] {line}")
-            
         if line.startswith("ok"):
             break
 
 
 def wait_move_done(ser):
-    """
-    M400 ile tüm hareketlerin bitmesini bekler.
-    Ardından M114 ile konumu sorgulayarak ekstra doğrulama ve senkronizasyon sağlar.
-    """
     send_and_wait(ser, 'M400')
     send_and_wait(ser, 'M114')
 
 
 def round_stepper(val):
-    """Değeri step motorun çözünürlüğüne (0.02 mm) yuvarlar."""
     return round(val / STEP_RES) * STEP_RES
 
 
@@ -94,24 +84,17 @@ def build_scan_plan(grid_x, grid_y, limit_x, limit_y):
     y_positions = [round_stepper(+half_y - j * step_y) for j in range(grid_y)]
 
     plan = []
-    
-    # DİKKAT: Tarama döngüsü artık offset noktasından (-half_x, +half_y) başlayacak.
-    # Bu yüzden current_x ve current_y 0 değil, ilk hedefin koordinatları olarak başlıyor.
     current_x = x_positions[0]
     current_y = y_positions[0]
     point_no = 1
 
     for row in range(grid_y):
         y_target = y_positions[row]
-        
-        # Zikzak (backlash) hatasını önlemek için Yılan Kavi iptal edildi!
-        # Daktilo gibi hep soldan sağa (tek yönlü) tarama yapılacak.
-        row_x = x_positions
+        row_x = x_positions  # Tek yönlü (daktilo stili) tarama
 
         for step_idx, x_target in enumerate(row_x):
             dx = round_stepper(x_target - current_x)
             dy = round_stepper(y_target - current_y)
-            
             actual_col = step_idx
 
             label = f"P{point_no:02d}_{x_target:.3f}_{y_target:.3f}"
@@ -126,12 +109,11 @@ def build_scan_plan(grid_x, grid_y, limit_x, limit_y):
             current_y = y_target
             point_no += 1
 
-    # Başlangıç offset koordinatlarını da main() fonksiyonuna döndürüyoruz
     return plan, x_positions[0], y_positions[0]
 
 
 # ---------------------------------------------------------------
-# KAMERA (Vimba / vmbpy)
+# KAMERA (Vimba / vmbpy) - HIZLANDIRILMIŞ VE KİLİTLİ POZLAMA
 # ---------------------------------------------------------------
 class VimbaCamera:
     def __init__(self):
@@ -149,17 +131,11 @@ class VimbaCamera:
         elif PixelFormat.Mono16 in supported_formats:
             self.cam.set_pixel_format(PixelFormat.Mono16)
 
-        self._current_exposure_us = 20000.0
-        try:
-            self.cam.ExposureTimeAbs.set(self._current_exposure_us)
-        except Exception:
-            try:
-                self.cam.ExposureTime.set(self._current_exposure_us)
-            except Exception:
-                pass
+        self._current_exposure_us = 15000.0
+        self._apply_exposure(self._current_exposure_us)
 
-    def _set_exposure(self, exposure_us):
-        exposure_us = float(np.clip(exposure_us, 20, 1_000_000))
+    def _apply_exposure(self, exposure_us):
+        exposure_us = float(np.clip(exposure_us, 50, 1_000_000))
         try:
             self.cam.ExposureTimeAbs.set(exposure_us)
         except Exception:
@@ -169,25 +145,28 @@ class VimbaCamera:
                 pass
         self._current_exposure_us = exposure_us
 
-    def capture_photo_auto_exposure(self, target_max=200, max_tries=6,
-                                     saturation_limit=250, min_signal=30):
-        img = None
-        for attempt in range(max_tries):
+    def calibrate_exposure_once(self, target_peak=190):
+        """
+        Başlangıçta lazer pozlamasını 1 kez kalibre eder ve kilitler.
+        Böylece tarama sırasında boş yere her adımda 6 kere beklemez,
+        eskisi gibi ışık hızında (instant) çeker.
+        """
+        print("[*] Lazer başlangıç pozlaması optimize ediliyor...")
+        for _ in range(5):
             img = self.capture_photo()
             peak = float(img.max())
-
-            if peak >= saturation_limit:
-                self._set_exposure(self._current_exposure_us * 0.4)
-                continue
-            elif peak < min_signal:
-                self._set_exposure(self._current_exposure_us * 2.5)
-                continue
+            if peak >= 250:
+                self._apply_exposure(self._current_exposure_us * 0.4)
+                time.sleep(0.05)
+            elif peak < 50:
+                self._apply_exposure(self._current_exposure_us * 2.0)
+                time.sleep(0.05)
             else:
-                scale = target_max / max(peak, 1.0)
-                scale = float(np.clip(scale, 0.5, 2.0))
-                self._set_exposure(self._current_exposure_us * scale)
-                return img
-        return img
+                scale = target_peak / max(peak, 1.0)
+                scale = float(np.clip(scale, 0.6, 1.5))
+                self._apply_exposure(self._current_exposure_us * scale)
+                break
+        print(f"[*] Pozlama kilitlendi: {self._current_exposure_us:.0f} µs")
 
     def capture_photo(self):
         frame = self.cam.get_frame()
@@ -199,7 +178,7 @@ class VimbaCamera:
             elif PixelFormat.Mono16 in convertible_formats:
                 frame = frame.convert_pixel_format(PixelFormat.Mono16)
             else:
-                raise RuntimeError(f"Kamera piksel formati donusturulemiyor.")
+                raise RuntimeError("Kamera piksel formati donusturulemiyor.")
 
         img = frame.as_opencv_image()
         if img.ndim == 3:
@@ -217,11 +196,6 @@ class VimbaCamera:
 
 
 def cv2_imwrite_utf8(filename, img):
-    """
-    OpenCV'nin (cv2.imwrite) Windows'ta Türkçe karakterli ('İ', 'Ş' vb.) klasör
-    yollarına fotoğraf kaydedememe (çökme veya sessizce başarısız olma) bug'ını 
-    aşmak için yazılmış özel kayıt fonksiyonudur.
-    """
     ext = os.path.splitext(filename)[1]
     retval, buffer = cv2.imencode(ext, img)
     if retval:
@@ -230,251 +204,155 @@ def cv2_imwrite_utf8(filename, img):
 
 
 # ---------------------------------------------------------------
-# LAZER MERKEZİ TESPİTİ
+# KUSURSUZ VE HIZLI DİNAMİK IZGARA TAKİBİ (ADAPTIVE TRACKER)
 # ---------------------------------------------------------------
-def _get_speckle_blobs(img_f, rel_thr=0.5, min_area=3):
+class AdaptiveGridTracker:
     """
-    Görüntüdeki her ayrık parlak beneği (speckle) tek tek tespit eder ve
-    her biri için (merkez_x, merkez_y, alan) döndürür.
+    Kameranın masada durduğu gerçek pozisyona ve ızgaranın satır/sütun
+    hareketlerine dinamik olarak uyum sağlar.
+    
+    1) Satır içi adımda bir önceki kolonun X koordinatından ilerler.
+    2) Yeni satıra geçerken bir önceki satırın ortalama Y değerini baz alır;
+       asla aşağıya, Thorlabs montaj halkasına kaymaz.
+    3) Eğer arama kutusu bir anlığına kaçırırsa, tüm görüntüde lazeri otomatik
+       bulup kutuyu anında lazerin üzerine kilitler (Global Fallback).
     """
-    blurred = cv2.GaussianBlur(img_f, (5, 5), 0)
-    thr = rel_thr * blurred.max()
-    mask = (blurred >= thr).astype(np.uint8)
-    n, _, stats, centroids = cv2.connectedComponentsWithStats(mask)
+    def __init__(self, search_radius=SEARCH_RADIUS, min_contrast=MIN_CONTRAST):
+        self.search_radius = search_radius
+        self.min_contrast = min_contrast
 
-    blobs = []
-    for i in range(1, n):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            cx, cy = centroids[i]
-            blobs.append((float(cx), float(cy), float(area)))
-    return blobs
+        # Gerçek laboratuvar ölçekleri (Bugünkü testlerden doğrulandı)
+        self.kx = 4.1    # piksel / mm_x (yaklaşık 108 px / 26.66 mm)
+        self.ky = 8.5    # piksel / mm_y (yaklaşık 85 px / 10.0 mm)
 
+        self.detected_map = {}  # (row, col) -> (cx, cy)
+        self.row_y_map = {}     # row -> ortalama y değeri
+        self.initial_anchor_x = 670.0
+        self.initial_anchor_y = 400.0
+        self.has_first_anchor = False
 
-def _count_speckles(img_f, rel_thr=0.5, min_area=3):
-    """
-    Görüntüdeki ayrık parlak nokta (speckle) sayısını sayar.
-    Diffraction paterni oluştuğunda tek bir blob yerine onlarca ayrı
-    parlak beneğe bölünür; bu fonksiyon bunu tespit etmek için kullanılır.
-    """
-    return len(_get_speckle_blobs(img_f, rel_thr=rel_thr, min_area=min_area))
+    def predict(self, step):
+        row = step["row"]
+        col = step["col"]
 
+        # 1. Strateji: Aynı satırda bir önceki sütun tespit edildiyse
+        if (row, col - 1) in self.detected_map:
+            prev_x, prev_y = self.detected_map[(row, col - 1)]
+            dx = self.kx * step["dx"]
+            return prev_x + dx, prev_y
 
-def _robust_envelope_center(blobs, trim_factor=2.5, min_keep_ratio=0.5, max_iter=4):
-    """
-    Diffraction paterninin ana (yoğun) beneğinden oluşan bulutunun merkezini
-    bulur. Sağ üst köşedeki sensör yansıması, alt sol köşedeki fringe deseni
-    gibi ANA BULUTTAN UZAK, TEKİL parlak lekelerin merkezi bozmasını
-    önlemek için medyan tabanlı, aykırı-değer eleyen (robust) bir yöntem
-    kullanır:
+        # 2. Strateji: Yeni satır başlangıcı (col == 0) -> Bir önceki satırın Y'sine göre in!
+        # Böylece alt metal halkaya asla kaymaz!
+        if (row - 1) in self.row_y_map:
+            prev_row_y = self.row_y_map[row - 1]
+            start_x = self.initial_anchor_x
+            # Gimbal step["dy"] negatif olduğundan aşağı doğru inme:
+            dy = -self.ky * step["dy"]
+            return start_x, prev_row_y + dy
 
-      1) Başlangıç tahmini olarak tüm benek merkezlerinin MEDYANI alınır
-         (medyan, ortalamanın aksine birkaç uzak aykırı değerden neredeyse
-         hiç etkilenmez).
-      2) Bu tahmine olan uzaklıklara bakılır, medyan uzaklığın
-         `trim_factor` katından uzak olan benekler (yani ana bulutun
-         parçası olmayan tekil lekeler) elenir.
-      3) Kalan beneklerin alan-ağırlıklı ortalaması ile merkez güncellenir.
-      4) Birkaç kez tekrarlanarak merkez stabilize edilir.
+        # 3. Strateji: İlk nokta (P01)
+        return self.initial_anchor_x, self.initial_anchor_y
 
-    Döndürür: (cx, cy, ana_bulutun_yaricapi)
-    """
-    pts = np.array([(b[0], b[1]) for b in blobs], dtype=np.float64)
-    weights = np.array([b[2] for b in blobs], dtype=np.float64)
+    def detect_and_update(self, img, step):
+        H, W = img.shape
+        x_pred, y_pred = self.predict(step)
+        r = self.search_radius
 
-    c = np.median(pts, axis=0)
-    keep = np.ones(len(pts), dtype=bool)
+        x1 = max(0, int(round(x_pred - r)))
+        x2 = min(W, int(round(x_pred + r + 1)))
+        y1 = max(0, int(round(y_pred - r)))
+        y2 = min(H, int(round(y_pred + r + 1)))
 
-    for _ in range(max_iter):
-        dists = np.linalg.norm(pts - c, axis=1)
-        med_dist = np.median(dists)
-        if med_dist <= 0:
-            break
+        roi = img[y1:y2, x1:x2]
+        found = False
+        cx, cy = float('nan'), float('nan')
+        status_msg = ""
 
-        new_keep = dists <= (med_dist * trim_factor)
-        # Cok fazla benegi elemeyelim (guvenlik)
-        if new_keep.sum() < max(4, int(len(pts) * min_keep_ratio)):
-            break
+        # --- AŞAMA 1: YEREL ARAMA PENCERESİNDE HIZLI ARAMA ---
+        if roi.size > 0:
+            border = np.concatenate([roi[0, :], roi[-1, :], roi[:, 0], roi[:, -1]])
+            bg = float(np.median(border))
+            roi_sub = np.maximum(0.0, roi.astype(np.float32) - bg)
+            roi_smooth = cv2.GaussianBlur(roi_sub, (5, 5), 0)
+            _, max_v, _, max_loc = cv2.minMaxLoc(roi_smooth)
 
-        keep = new_keep
-        pts_k = pts[keep]
-        w_k = weights[keep]
-        c_new = (pts_k * w_k[:, None]).sum(axis=0) / w_k.sum()
+            if max_v >= self.min_contrast:
+                thr = max(6.0, 0.35 * max_v)
+                binary = (roi_sub >= thr).astype(np.uint8)
+                n, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+                if n > 1:
+                    target_idx = labels[max_loc[1], max_loc[0]]
+                    if target_idx == 0:
+                        target_idx = 1 + stats[1:, cv2.CC_STAT_AREA].argmax()
+                    area = stats[target_idx, cv2.CC_STAT_AREA]
+                    if 2 <= area <= 6000:
+                        mask = (labels == target_idx)
+                        ys, xs = mask.nonzero()
+                        w = roi_sub[ys, xs]
+                        cx = float((xs * w).sum() / w.sum() + x1)
+                        cy = float((ys * w).sum() / w.sum() + y1)
+                        found = True
+                        status_msg = f"OK (kontrast={max_v:.0f}, alan={area})"
 
-        if np.linalg.norm(c_new - c) < 0.5:
-            c = c_new
-            break
-        c = c_new
+        # --- AŞAMA 2: EĞER PENCEREDE YOKSA, KÜRESEL LAZER YAKALAYICI (FALLBACK) ---
+        # Kutu yanlış bir yere baktıysa lazeri sensörde ara ve kutuyu anında lazerin üstüne çek!
+        if not found:
+            # 1 piksellik sıcak pikselleri (862, 138 gibi) ve dev oda ışıklarını ele
+            thr_global = max(35, int(img.max() * 0.35))
+            binary_g = (img >= thr_global).astype(np.uint8)
+            n_g, labels_g, stats_g, centroids_g = cv2.connectedComponentsWithStats(binary_g)
+            
+            candidates = []
+            for i in range(1, n_g):
+                area_g = stats_g[i, cv2.CC_STAT_AREA]
+                # Gerçek lazer beneği: 2 pikselden büyük, 10000 pikselden küçük (oda ışığı >50000'dir)
+                if 2 <= area_g <= 10000:
+                    candidates.append((area_g, centroids_g[i]))
 
-    dists = np.linalg.norm(pts - c, axis=1)
-    kept_dists = dists[keep] if keep.any() else dists
-    envelope_radius = float(np.percentile(kept_dists, 90)) if len(kept_dists) else 0.0
+            if candidates:
+                # Varsa tahmine en yakın olanı, yoksa en belirgin olanı seç
+                candidates.sort(key=lambda item: np.hypot(item[1][0] - x_pred, item[1][1] - y_pred))
+                best_area, (gx, gy) = candidates[0]
+                cx, cy = float(gx), float(gy)
+                found = True
+                status_msg = f"OK [KUTU HİZALANDI] ({cx:.1f}, {cy:.1f})"
+                # Arama kutusunu doğrudan bulunan lazerin etrafına çek
+                x1 = max(0, int(round(cx - r)))
+                x2 = min(W, int(round(cx + r + 1)))
+                y1 = max(0, int(round(cy - r)))
+                y2 = min(H, int(round(cy + r + 1)))
 
-    return float(c[0]), float(c[1]), envelope_radius
+        if found:
+            self.detected_map[(step["row"], step["col"])] = (cx, cy)
+            # Satır ortalama Y değerini güncelle
+            row_pts = [pt[1] for k, pt in self.detected_map.items() if k[0] == step["row"]]
+            self.row_y_map[step["row"]] = float(np.mean(row_pts))
+            
+            # İlk nokta (P01) ise başlangıç X çıpasını sabitle
+            if not self.has_first_anchor and step["col"] == 0:
+                self.initial_anchor_x = cx
+                self.initial_anchor_y = cy
+                self.has_first_anchor = True
+                print(f"  [*] Başlangıç Çıpası Kilitlendi: ({cx:.1f}, {cy:.1f})")
 
-
-def _find_simple_laser_centroid(img):
-    """
-    ESKİ ALGORİTMA (diffraction YOKKEN kullanılır - tek nokta lazer).
-    Güçlü Gaussian Blur ile saçılmalara karşı dirençli ROI + connected
-    components + intensity weighted centroid algoritması.
-    """
-    img_f = img.astype(np.float32)
-
-    blurred_for_max = cv2.GaussianBlur(img_f, (41, 41), 0)
-    _, max_val, _, max_loc = cv2.minMaxLoc(blurred_for_max)
-    if max_val <= 0:
-        raise RuntimeError("Lazer noktasi bulunamadi.")
-
-    roi_size = 60
-    x0, y0 = max_loc
-    x1 = max(0, x0 - roi_size)
-    x2 = min(img.shape[1], x0 + roi_size + 1)
-    y1 = max(0, y0 - roi_size)
-    y2 = min(img.shape[0], y0 + roi_size + 1)
-
-    roi = img_f[y1:y2, x1:x2]
-    roi = cv2.GaussianBlur(roi, (5, 5), 0)
-
-    thr = 0.5 * roi.max()
-    binary = (roi >= thr).astype("uint8")
-
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
-    if n <= 1:
-        raise RuntimeError("Lazer blob'u bulunamadi.")
-
-    idx = 1 + stats[1:, cv2.CC_STAT_AREA].argmax()
-    mask = labels == idx
-
-    ys, xs = mask.nonzero()
-    w = roi[ys, xs]
-    weight_sum = w.sum()
-
-    if weight_sum <= 0:
-        raise RuntimeError("Lazer centroid hesabi yapilamadi.")
-
-    cx = (xs * w).sum() / weight_sum + x1
-    cy = (ys * w).sum() / weight_sum + y1
-
-    return float(cx), float(cy)
-
-
-def _find_diffraction_center(img):
-    """
-    YENİ ALGORİTMA (diffraction paterni VARKEN kullanılır).
-
-    Diffraction oluştuğunda gerçek merkez, en parlak beneğin olduğu yer
-    DEĞİL; paternin tam ortasındaki, çevresi parlak fakat kendisi KARANLIK
-    olan sönümlenme noktasıdır (fotoğrafta gördüğünüz o küçük siyah nokta).
-
-    Adımlar:
-      1) `_robust_envelope_center` ile, uzaktaki tekil parlak lekelerden
-         etkilenmeyen, ana speckle bulutunun GÜVENİLİR kaba merkezini bul.
-      2) Bu merkezin etrafında (bulutun tipik yarıçapına göre ölçeklenmiş)
-         küçük bir pencere içinde, "parlak çevre + karanlık iç" yapısına
-         uyan bölgeyi ara ve o bölgenin yoğunluk-ağırlıklı merkezini
-         gerçek merkez olarak döndür.
-    """
-    img_f = img.astype(np.float32)
-
-    blobs = _get_speckle_blobs(img_f)
-    if len(blobs) < 4:
-        raise RuntimeError("Diffraction merkezi icin yeterli benek yok.")
-
-    cx_coarse, cy_coarse, env_radius = _robust_envelope_center(blobs)
-    if env_radius <= 0:
-        env_radius = 60.0
-
-    # 2) Kaba merkezin etrafinda, bulutun tipik yaricapina gore olceklenmis
-    #    kucuk bir pencerede karanlik noktayi ara.
-    search_r = max(15, int(env_radius * 0.4))
-    x0 = max(0, int(cx_coarse - search_r))
-    x1 = min(img.shape[1], int(cx_coarse + search_r + 1))
-    y0 = max(0, int(cy_coarse - search_r))
-    y1 = min(img.shape[0], int(cy_coarse + search_r + 1))
-
-    sub = img_f[y0:y1, x0:x1]
-
-    # "Karanlik delik" tespiti: sadece en karanlik pikseli aramak, kenar/
-    # arka plan gibi zaten karanlik olan bolgeleri de yanlislikla secebilir.
-    # Bunun yerine, her pikselin GENIS cevresindeki ortalama parlakligi
-    # (buyuk blur) kendi degeriyle (kucuk blur) kiyaslayip, "cevresi
-    # belirgin sekilde parlak ama kendisi karanlik" olan gercek deligi
-    # ariyoruz. Kenar/arka plan bolgelerinde hem gecis hem cevre karanlik
-    # oldugundan bu fark orada yuksek cikmaz; delik yalnizca patern icinde,
-    # parlak halkanin tam ortasinda yuksek fark uretir.
-    small_blur = cv2.GaussianBlur(sub, (5, 5), 0)
-    large_blur = cv2.GaussianBlur(sub, (31, 31), 0)
-
-    if large_blur.max() <= 0:
-        return cx_coarse, cy_coarse
-
-    # Sadece cevresi zaten yeterince parlak olan bolgelerde ariyoruz;
-    # aksi halde sonucta karanlik olan bolgeler (arka plan) de aday olur.
-    valid = large_blur >= (0.35 * large_blur.max())
-    if not valid.any():
-        return cx_coarse, cy_coarse
-
-    diff = large_blur - small_blur
-    diff_masked = np.where(valid, diff, -np.inf)
-
-    peak_val = diff_masked.max()
-    if not np.isfinite(peak_val) or peak_val <= 0:
-        return cx_coarse, cy_coarse
-
-    # Tepe degerin bir kismina yakin butun pikselleri toplayip agirlikli
-    # merkezini al (tek piksele degil, delik bolgesinin butunune bakariz).
-    thr_dark = 0.7 * peak_val
-    dark_mask = diff_masked >= thr_dark
-
-    ys, xs = np.nonzero(dark_mask)
-    if len(xs) == 0:
-        return cx_coarse, cy_coarse
-
-    w = diff_masked[ys, xs]
-    cx = (xs * w).sum() / w.sum() + x0
-    cy = (ys * w).sum() / w.sum() + y0
-
-    return float(cx), float(cy)
-
-
-def find_laser_centroid(img, speckle_threshold=6):
-    """
-    Ana merkez tespit fonksiyonu.
-
-    Önce görüntüde diffraction (kırınım) paterni oluşup oluşmadığına bakar
-    (ayrı ayrı parlak benek sayısına göre):
-      - Diffraction VARSA -> _find_diffraction_center()
-        (paternin ortasındaki siyah noktayı bulan, uzak aykırı parlak
-        lekelere dayanıklı yöntem) kullanılır.
-      - Diffraction YOKSA (temiz tek nokta lazer) -> eski
-        _find_simple_laser_centroid() kullanılır.
-
-    speckle_threshold: Diffraction kabul edilmesi için gereken minimum
-    ayrık parlak beneği sayısı. Sahada gerçek verilerle test edip
-    ihtiyaca göre 4-10 arası ayarlayabilirsiniz.
-    """
-    img_f = img.astype(np.float32)
-    num_speckles = _count_speckles(img_f)
-
-    if num_speckles >= speckle_threshold:
-        try:
-            return _find_diffraction_center(img)
-        except RuntimeError:
-            # Diffraction merkez bulma başarısız olursa eski yönteme geri dön
-            return _find_simple_laser_centroid(img)
-    else:
-        return _find_simple_laser_centroid(img)
+            return cx, cy, (x1, y1, x2, y2), status_msg
+        else:
+            return float('nan'), float('nan'), (x1, y1, x2, y2), "NOT_DETECTED"
 
 
 # ---------------------------------------------------------------
-# TARAMA YÜRÜTME
+# TARAMA YÜRÜTME - MAKSİMUM HIZ & AKILLI GÖRSELLEŞTİRME
 # ---------------------------------------------------------------
 def run_scan(ser, camera, plan):
     results = []
-    WINDOW_NAME = "Lazer Tarama - Canli Goruntu"
+    tracker = AdaptiveGridTracker()
+
+    WINDOW_NAME = "Lazer Tarama - Hizli & Akilli Takip"
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_NAME, 900, 700)
+    cv2.resizeWindow(WINDOW_NAME, 950, 750)
+
+    # 1. Başlangıçta pozlamayı tek seferde optimize et ve kilitle!
+    camera.calibrate_exposure_once(target_peak=190)
 
     for step in plan:
         parts = []
@@ -483,45 +361,53 @@ def run_scan(ser, camera, plan):
         if step["dy"] != 0:
             parts.append(f"Y{step['dy']:.3f}")
 
-        # Eğer hareket varsa git ve bekle. İlk adımda (P01) dx=0 ve dy=0 olacağı için
-        # motorlara tekrar komut gönderilmez, doğrudan foto çeker.
         if parts:
             send_and_wait(ser, "G1 " + " ".join(parts) + f" F{FEEDRATE}")
             wait_move_done(ser)
-            
-            # Eğer satırın ilk noktasıysa (uzun atlayış), ROW_START_DWELL_SEC kadar bekle
             wait_time = ROW_START_DWELL_SEC if step["col"] == 0 else DWELL_SEC
-            
             print(f"[{step['label']}] Hedefe ulasildi, titresim icin {wait_time}sn bekleniyor...")
             time.sleep(wait_time)
         else:
             print(f"[{step['label']}] (Baslangic noktasindayiz, beklemeden foto cekiliyor...)")
 
-        img = camera.capture_photo_auto_exposure()
+        # 2. Hızlı çekim (Artık bekleme veya 6 kere yeniden deneme yok!)
+        img = camera.capture_photo()
         fname = os.path.join(SAVE_DIR, f"{step['label']}.png")
         cv2_imwrite_utf8(fname, img)
 
-        try:
-            xu, yu = find_laser_centroid(img)
-        except RuntimeError as e:
-            print(f"  UYARI: {step['label']} -> {e}")
-            xu, yu = float('nan'), float('nan')
+        # 3. Akıllı tespit (Kutu asla kaymaz, lazeri takip eder)
+        xu, yu, (rx1, ry1, rx2, ry2), status_msg = tracker.detect_and_update(img, step)
 
-        print(f"  -> piksel = ({xu:.2f}, {yu:.2f})")
+        if np.isnan(xu):
+            print(f"  [!] NOT DETECTED: {step['label']}")
+            pt_status = "NOT_DETECTED"
+        else:
+            print(f"  -> piksel = ({xu:.2f}, {yu:.2f}) [{status_msg}]")
+            pt_status = "OK"
 
-        # Canlı görüntü
+        # 4. Canlı görselleştirme
         display = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img.copy()
-        if not np.isnan(xu):
+
+        # Arama kutusu (Camgöbeği)
+        cv2.rectangle(display, (rx1, ry1), (rx2, ry2), (255, 200, 0), 2)
+        cv2.putText(display, "Takip Kutusu (ROI)", (rx1, max(20, ry1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
+
+        if pt_status == "OK":
             cv2.drawMarker(display, (int(round(xu)), int(round(yu))),
-                            (0, 0, 255), markerType=cv2.MARKER_CROSS,
-                            markerSize=25, thickness=2)
-        cv2.putText(display, f"{step['label']}  px=({xu:.1f},{yu:.1f})",
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                           (0, 255, 0), markerType=cv2.MARKER_CROSS,
+                           markerSize=25, thickness=2)
+            cv2.putText(display, f"{step['label']}  px=({xu:.1f},{yu:.1f}) [OK]",
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
+        else:
+            cv2.putText(display, f"{step['label']}  [NOT DETECTED - ATLANDI]",
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
+
         cv2.imshow(WINDOW_NAME, display)
         cv2.waitKey(1)
 
         results.append({
-            **step, "xu": xu, "yu": yu, "image_path": fname,
+            **step, "xu": xu, "yu": yu, "status": pt_status, "image_path": fname,
         })
 
     cv2.destroyWindow(WINDOW_NAME)
@@ -529,7 +415,7 @@ def run_scan(ser, camera, plan):
 
 
 # ---------------------------------------------------------------
-# FİT & GÖRSELLEŞTİRME (Aynı)
+# FİT & GÖRSELLEŞTİRME (Aykırı Değer Korumalı Model)
 # ---------------------------------------------------------------
 def project(params, xprime, yprime):
     fx, fy, cx, cy, k1, k2, p1, p2 = params
@@ -540,10 +426,15 @@ def project(params, xprime, yprime):
     yu = fy * y_dist + cy
     return xu, yu
 
+
 def fit_camera_params(results):
     valid = [r for r in results if not np.isnan(r["xu"])]
     if len(valid) < 8:
-        raise RuntimeError("Fit için yeterli geçerli nokta yok (en az 8 gerekir).")
+        raise RuntimeError(f"Fit için yeterli geçerli nokta yok ({len(valid)} nokta var, en az 8 gerekir).")
+
+    print(f"\n[*] Toplam Ölçüm Noktası: {len(results)}")
+    print(f"[*] Başarıyla Yakalanan Nokta: {len(valid)}")
+    print(f"[*] Tespit Edilemeyen (Not Detected): {len(results) - len(valid)}")
 
     theta_x = np.array([r["mm_x"] * DEG_PER_MM_X for r in valid])
     theta_y = np.array([r["mm_y"] * DEG_PER_MM_Y for r in valid])
@@ -553,19 +444,53 @@ def fit_camera_params(results):
     xu_meas = np.array([r["xu"] for r in valid])
     yu_meas = np.array([r["yu"] for r in valid])
 
-    def residuals(params):
-        xu_pred, yu_pred = project(params, xprime, yprime)
-        return np.concatenate([xu_meas - xu_pred, yu_meas - yu_pred])
+    def residuals(params, xp, yp, xm, ym):
+        xu_pred, yu_pred = project(params, xp, yp)
+        return np.concatenate([xm - xu_pred, ym - yu_pred])
 
     x0 = [2290, 2290, 1024, 1024, 0, 0, 0, 0]
-    result = least_squares(residuals, x0, method='lm', max_nfev=20000)
-    fx, fy, cx, cy, k1, k2, p1, p2 = result.x
-    rms = np.sqrt(np.mean(result.fun**2))
-    
+
+    # 1. Aşama: Aykırı noktalara (outlier) karşı dirençli Soft-L1 optimizasyonu
+    res_robust = least_squares(lambda p: residuals(p, xprime, yprime, xu_meas, yu_meas),
+                               x0, loss='soft_l1', f_scale=2.0, max_nfev=20000)
+
+    xu_pred, yu_pred = project(res_robust.x, xprime, yprime)
+    errors = np.hypot(xu_meas - xu_pred, yu_meas - yu_pred)
+    med_err = float(np.median(errors))
+
+    outlier_thresh = max(OUTLIER_ERROR_THRESH_PX, 3.5 * med_err)
+    inliers = errors <= outlier_thresh
+    num_outliers = int((~inliers).sum())
+
+    if num_outliers > 0 and inliers.sum() >= 8:
+        print(f"\n[!] GÜVENLİK FİLTRESİ: {num_outliers} adet hatalı nokta tespit edildi ve elendi!")
+        for idx in np.where(~inliers)[0]:
+            print(f"    - Elenen Nokta: {valid[idx]['label']} (Sapma: {errors[idx]:.2f} px > Eşik: {outlier_thresh:.2f} px)")
+            valid[idx]["status"] = "OUTLIER_EXCLUDED"
+
+        xprime_c = xprime[inliers]
+        yprime_c = yprime[inliers]
+        xu_c = xu_meas[inliers]
+        yu_c = yu_meas[inliers]
+
+        final_res = least_squares(lambda p: residuals(p, xprime_c, yprime_c, xu_c, yu_c),
+                                  res_robust.x, method='lm', max_nfev=20000)
+        final_params = final_res.x
+        final_rms = float(np.sqrt(np.mean(final_res.fun**2)))
+    else:
+        final_res = least_squares(lambda p: residuals(p, xprime, yprime, xu_meas, yu_meas),
+                                  res_robust.x, method='lm', max_nfev=20000)
+        final_params = final_res.x
+        final_rms = float(np.sqrt(np.mean(final_res.fun**2)))
+
+    fx, fy, cx, cy, k1, k2, p1, p2 = final_params
     return {
         "fx": fx, "fy": fy, "cx": cx, "cy": cy,
-        "k1": k1, "k2": k2, "p1": p1, "p2": p2, "rms_px": rms,
+        "k1": k1, "k2": k2, "p1": p1, "p2": p2, "rms_px": final_rms,
+        "valid_points": int(inliers.sum()) if num_outliers > 0 else len(valid),
+        "outliers_removed": num_outliers
     }
+
 
 def save_composite(results, img_shape, out_path):
     composite = np.zeros(img_shape, dtype=np.uint8)
@@ -585,6 +510,7 @@ def save_composite(results, img_shape, out_path):
         cv2.drawMarker(composite_color, pt, (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=14, thickness=2)
 
     cv2_imwrite_utf8(out_path, composite_color)
+
 
 def save_distortion_comparison(results, fit_params, img_shape, out_path):
     composite = np.zeros(img_shape, dtype=np.uint8)
@@ -618,13 +544,14 @@ def save_distortion_comparison(results, fit_params, img_shape, out_path):
                 (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2_imwrite_utf8(out_path, composite_color)
 
+
 def save_csv(results, out_path):
-    fieldnames = ["label", "mm_x", "mm_y", "row", "col", "xu", "yu", "image_path"]
+    fieldnames = ["label", "mm_x", "mm_y", "row", "col", "xu", "yu", "status", "image_path"]
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in results:
-            writer.writerow({k: r[k] for k in fieldnames})
+            writer.writerow({k: r.get(k, "") for k in fieldnames})
 
 
 # ---------------------------------------------------------------
@@ -635,28 +562,23 @@ def main():
     ser = serial.Serial(PORT, BAUD, timeout=1)
     camera = VimbaCamera()
 
-    # Portu ilk açtığımızda tamponu temizleyelim
     ser.reset_input_buffer()
     
     print(f"Homing bekleniyor ({HOMING_WAIT_SEC} sn)...")
     time.sleep(HOMING_WAIT_SEC)
     
-    # 1. Homing sonrası mevcut konumu G92 ile mutlak 0,0 yap
     send_and_wait(ser, 'G92 X0 Y0')
-    
-    # 2. Göreli (Relative) Koordinat moduna geçir
     send_and_wait(ser, 'G91')
 
-    # Planı ve offset koordinatlarını oluştur
     plan, start_x, start_y = build_scan_plan(GRID_SIZE_X, GRID_SIZE_Y, SAFE_LIMIT_X, SAFE_LIMIT_Y)
     
-    print(f"\n=== OFFSET: ece İlk baslangic noktasina gidiliyor (X={start_x:.3f}, Y={start_y:.3f}) ===")
+    print(f"\n=== OFFSET: İlk başlangıç noktasına gidiliyor (X={start_x:.3f}, Y={start_y:.3f}) ===")
     send_and_wait(ser, f"G1 X{start_x:.3f} Y{start_y:.3f} F{FEEDRATE}")
     wait_move_done(ser)
     print(f"Offset'e ulaşıldı. Titreşimin sönmesi için {INITIAL_DWELL_SEC} sn bekleniyor...")
     time.sleep(INITIAL_DWELL_SEC)
 
-    print(f"\n=== {GRID_SIZE_X}x{GRID_SIZE_Y} tarama başlıyor ({len(plan)} nokta) ===\n")
+    print(f"\n=== {GRID_SIZE_X}x{GRID_SIZE_Y} Tarama Başlıyor ({len(plan)} nokta) ===\n")
     results = run_scan(ser, camera, plan)
 
     print(f"\n=== Tarama tamamlandı, {len(results)} nokta işlendi ===\n")
@@ -675,6 +597,7 @@ def main():
         print(f"k1 = {fit_params['k1']:.6f} | k2 = {fit_params['k2']:.6f}")
         print(f"p1 = {fit_params['p1']:.6f} | p2 = {fit_params['p2']:.6f}")
         print(f"RMS = {fit_params['rms_px']:.4f} piksel")
+        print(f"Kullanılan Temiz Nokta Sayısı: {fit_params['valid_points']}")
 
         if fit_params["k1"] < 0:
             print("Yorum: k1 < 0 -> BARREL (fıçı) distorsiyonu baskın.")
