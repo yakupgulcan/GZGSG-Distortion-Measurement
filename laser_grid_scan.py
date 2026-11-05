@@ -30,6 +30,10 @@ DWELL_SEC = 0.7            # Normal ızgara adımlarında bekleme süresi
 DEG_PER_MM_X = 1.0 / 5.0      # azimut (0.2 deg/mm)
 DEG_PER_MM_Y = 1.0 / 2.37     # elevasyon (~0.422 deg/mm)
 
+# --- FİZİKSEL ÇALIŞMA MESAFESİ VE OPTİK GEOMETRİ AYARLARI ---
+# Pinhole çıkışı ile kamera lensinin ön yüzü arasındaki yaklaşık mesafe (~63 mm - 120 mm)
+NOMINAL_DISTANCE_MM = 80.0    # Başlangıç tahmini (mm)
+
 # --- AYDINLIK ORTAM VE AKILLI TAKİP (ROI) AYARLARI ---
 SEARCH_RADIUS = 160           # Lazerin etrafındaki dinamik arama penceresi (piksel)
 MIN_CONTRAST = 10.0           # Minimum yerel kontrast eşiği (DN)
@@ -415,13 +419,39 @@ def run_scan(ser, camera, plan):
 
 
 # ---------------------------------------------------------------
-# FİT & GÖRSELLEŞTİRME (Aykırı Değer Korumalı Model)
+# FİT & GÖRSELLEŞTİRME (R & T Extrinsic + Brown-Conrady Modeli)
 # ---------------------------------------------------------------
-def project(params, xprime, yprime):
-    fx, fy, cx, cy, k1, k2, p1, p2 = params
+def project(params, theta_x, theta_y):
+    """
+    Gimbal açılarını (theta_x, theta_y radyan) 3B uzayda ışın/konum vektörüne çevirir,
+    kameranın bacaklar üzerindeki açısal duruşu (R) ve mesafesi (T) ile dönüştürür,
+    Brown-Conrady lens distorsiyonunu uygulayıp piksel koordinatlarına izdüşürür.
+    
+    params: [fx, fy, cx, cy, k1, k2, p1, p2, rx, ry, rz, tx, ty, tz]
+    """
+    fx, fy, cx, cy, k1, k2, p1, p2, rx, ry, rz, tx, ty, tz = params
+    R, _ = cv2.Rodrigues(np.array([rx, ry, rz], dtype=np.float64))
+    T = np.array([tx, ty, tz], dtype=np.float64)
+
+    # 1. Gimbal 3B ışın doğrultusu (Gimbal referans koordinatları)
+    rays = np.stack([np.tan(theta_x), np.tan(theta_y), np.ones_like(theta_x)], axis=-1)
+
+    # 2. Kamera koordinat sistemine dönüşüm: P_cam = R @ P_gimbal + T
+    p_cam = (R @ rays.T).T + T
+
+    # 3. Perspektif izdüşüm (Normalize koordinatlar: x' = X_c/Z_c, y' = Y_c/Z_c)
+    Z_c = p_cam[:, 2]
+    Z_safe = np.where(np.abs(Z_c) < 1e-6, 1e-6, Z_c)
+    xprime = p_cam[:, 0] / Z_safe
+    yprime = p_cam[:, 1] / Z_safe
+
+    # 4. Lens distorsiyon modeli (Brown-Conrady)
     r2 = xprime**2 + yprime**2
-    x_dist = xprime * (1 + k1*r2 + k2*r2**2) + 2*p1*xprime*yprime + p2*(r2 + 2*xprime**2)
-    y_dist = yprime * (1 + k1*r2 + k2*r2**2) + p1*(r2 + 2*yprime**2) + 2*p2*xprime*yprime
+    radial = 1.0 + k1 * r2 + k2 * r2**2
+    x_dist = xprime * radial + 2.0 * p1 * xprime * yprime + p2 * (r2 + 2.0 * xprime**2)
+    y_dist = yprime * radial + p1 * (r2 + 2.0 * yprime**2) + 2.0 * p2 * xprime * yprime
+
+    # 5. İçsel matris (K) ile sensör pikseline izdüşüm
     xu = fx * x_dist + cx
     yu = fy * y_dist + cy
     return xu, yu
@@ -429,32 +459,54 @@ def project(params, xprime, yprime):
 
 def fit_camera_params(results):
     valid = [r for r in results if not np.isnan(r["xu"])]
-    if len(valid) < 8:
-        raise RuntimeError(f"Fit için yeterli geçerli nokta yok ({len(valid)} nokta var, en az 8 gerekir).")
+    if len(valid) < 14:
+        raise RuntimeError(f"Fit için yeterli geçerli nokta yok ({len(valid)} nokta var, R ve T modeli için en az 14 gerekir).")
 
     print(f"\n[*] Toplam Ölçüm Noktası: {len(results)}")
     print(f"[*] Başarıyla Yakalanan Nokta: {len(valid)}")
     print(f"[*] Tespit Edilemeyen (Not Detected): {len(results) - len(valid)}")
 
-    theta_x = np.array([r["mm_x"] * DEG_PER_MM_X for r in valid])
-    theta_y = np.array([r["mm_y"] * DEG_PER_MM_Y for r in valid])
-    xprime = np.tan(np.radians(theta_x))
-    yprime = np.tan(np.radians(theta_y))
+    theta_x = np.radians(np.array([r["mm_x"] * DEG_PER_MM_X for r in valid]))
+    theta_y = np.radians(np.array([r["mm_y"] * DEG_PER_MM_Y for r in valid]))
 
     xu_meas = np.array([r["xu"] for r in valid])
     yu_meas = np.array([r["yu"] for r in valid])
 
-    def residuals(params, xp, yp, xm, ym):
-        xu_pred, yu_pred = project(params, xp, yp)
+    def residuals(params, tx_rad, ty_rad, xm, ym):
+        xu_pred, yu_pred = project(params, tx_rad, ty_rad)
         return np.concatenate([xm - xu_pred, ym - yu_pred])
 
-    x0 = [2290, 2290, 1024, 1024, 0, 0, 0, 0]
+    # Manta G-419 (2048x2048, 5.5 um) + Basler 12mm f/2.0 Lens:
+    # Teorik odak uzaklığı: fx_teorik = 12 / 0.0055 ≈ 2182 piksel.
+    # [fx, fy, cx, cy, k1, k2, p1, p2, rx, ry, rz, tx, ty, tz]
+    x0 = [
+        2182.0, -2182.0, 1024.0, 1024.0,   # Odak ve optik merkez
+        0.0, 0.0, 0.0, 0.0,                # k1, k2, p1, p2
+        0.0, 0.0, 0.0,                     # rx, ry, rz (Rotasyon)
+        0.0, 0.0, NOMINAL_DISTANCE_MM      # tx, ty, tz (Mesafe mm)
+    ]
 
-    # 1. Aşama: Aykırı noktalara (outlier) karşı dirençli Soft-L1 optimizasyonu
-    res_robust = least_squares(lambda p: residuals(p, xprime, yprime, xu_meas, yu_meas),
-                               x0, loss='soft_l1', f_scale=2.0, max_nfev=20000)
+    # Fiziksel parametre sınırları
+    lower = [
+        800.0, -4000.0, 700.0, 700.0,
+        -5.0, -10.0, -0.05, -0.05,
+        -np.pi/4, -np.pi/4, -np.pi/4,
+        -150.0, -150.0, 20.0
+    ]
+    upper = [
+        4000.0, -800.0, 1350.0, 1350.0,
+        5.0, 10.0, 0.05, 0.05,
+        np.pi/4, np.pi/4, np.pi/4,
+        150.0, 150.0, 350.0
+    ]
 
-    xu_pred, yu_pred = project(res_robust.x, xprime, yprime)
+    # 1. Aşama: Aykırı noktalara (outlier) karşı dirençli Soft-L1 optimizasyonu (TRF)
+    res_robust = least_squares(
+        lambda p: residuals(p, theta_x, theta_y, xu_meas, yu_meas),
+        x0, bounds=(lower, upper), loss='soft_l1', f_scale=2.0, max_nfev=30000
+    )
+
+    xu_pred, yu_pred = project(res_robust.x, theta_x, theta_y)
     errors = np.hypot(xu_meas - xu_pred, yu_meas - yu_pred)
     med_err = float(np.median(errors))
 
@@ -462,33 +514,40 @@ def fit_camera_params(results):
     inliers = errors <= outlier_thresh
     num_outliers = int((~inliers).sum())
 
-    if num_outliers > 0 and inliers.sum() >= 8:
+    if num_outliers > 0 and inliers.sum() >= 14:
         print(f"\n[!] GÜVENLİK FİLTRESİ: {num_outliers} adet hatalı nokta tespit edildi ve elendi!")
         for idx in np.where(~inliers)[0]:
             print(f"    - Elenen Nokta: {valid[idx]['label']} (Sapma: {errors[idx]:.2f} px > Eşik: {outlier_thresh:.2f} px)")
             valid[idx]["status"] = "OUTLIER_EXCLUDED"
 
-        xprime_c = xprime[inliers]
-        yprime_c = yprime[inliers]
+        tx_c = theta_x[inliers]
+        ty_c = theta_y[inliers]
         xu_c = xu_meas[inliers]
         yu_c = yu_meas[inliers]
 
-        final_res = least_squares(lambda p: residuals(p, xprime_c, yprime_c, xu_c, yu_c),
-                                  res_robust.x, method='lm', max_nfev=20000)
+        final_res = least_squares(
+            lambda p: residuals(p, tx_c, ty_c, xu_c, yu_c),
+            res_robust.x, bounds=(lower, upper), method='trf', max_nfev=30000
+        )
         final_params = final_res.x
         final_rms = float(np.sqrt(np.mean(final_res.fun**2)))
     else:
-        final_res = least_squares(lambda p: residuals(p, xprime, yprime, xu_meas, yu_meas),
-                                  res_robust.x, method='lm', max_nfev=20000)
-        final_params = final_res.x
-        final_rms = float(np.sqrt(np.mean(final_res.fun**2)))
+        final_params = res_robust.x
+        final_rms = float(np.sqrt(np.mean(res_robust.fun**2)))
 
-    fx, fy, cx, cy, k1, k2, p1, p2 = final_params
+    fx, fy, cx, cy, k1, k2, p1, p2, rx, ry, rz, tx, ty, tz = final_params
+    rx_deg, ry_deg, rz_deg = np.degrees([rx, ry, rz])
+
     return {
         "fx": fx, "fy": fy, "cx": cx, "cy": cy,
-        "k1": k1, "k2": k2, "p1": p1, "p2": p2, "rms_px": final_rms,
+        "k1": k1, "k2": k2, "p1": p1, "p2": p2,
+        "rx_rad": rx, "ry_rad": ry, "rz_rad": rz,
+        "pitch_deg": rx_deg, "yaw_deg": ry_deg, "roll_deg": rz_deg,
+        "tx_mm": tx, "ty_mm": ty, "tz_mm": tz,
+        "rms_px": final_rms,
         "valid_points": int(inliers.sum()) if num_outliers > 0 else len(valid),
-        "outliers_removed": num_outliers
+        "outliers_removed": num_outliers,
+        "full_params": list(final_params)
     }
 
 
@@ -515,21 +574,37 @@ def save_composite(results, img_shape, out_path):
 def save_distortion_comparison(results, fit_params, img_shape, out_path):
     composite = np.zeros(img_shape, dtype=np.uint8)
     composite_color = cv2.cvtColor(composite, cv2.COLOR_GRAY2BGR)
-    fx, fy, cx, cy = fit_params["fx"], fit_params["fy"], fit_params["cx"], fit_params["cy"]
     point_map = {(r["row"], r["col"]): r for r in results}
 
-    for r in results:
-        xp = np.tan(np.radians(r["mm_x"] * DEG_PER_MM_X))
-        yp = np.tan(np.radians(r["mm_y"] * DEG_PER_MM_Y))
-        r["ideal_pt"] = (int(round(fx * xp + cx)), int(round(fy * yp + cy)))
+    full_p = fit_params.get("full_params")
+    if full_p is not None:
+        # İdeal referans ızgara: Distorsiyonsuz (k1=0, k2=0, p1=0, p2=0), ancak R ve T geometrisi dahil
+        ideal_params = list(full_p)
+        ideal_params[4] = 0.0  # k1 = 0
+        ideal_params[5] = 0.0  # k2 = 0
+        ideal_params[6] = 0.0  # p1 = 0
+        ideal_params[7] = 0.0  # p2 = 0
 
+        valid_results = [r for r in results]
+        tx_all = np.radians(np.array([r["mm_x"] * DEG_PER_MM_X for r in valid_results]))
+        ty_all = np.radians(np.array([r["mm_y"] * DEG_PER_MM_Y for r in valid_results]))
+        ix_all, iy_all = project(ideal_params, tx_all, ty_all)
+
+        for i, r in enumerate(valid_results):
+            r["ideal_pt"] = (int(round(ix_all[i])), int(round(iy_all[i])))
+    else:
+        for r in results:
+            r["ideal_pt"] = (int(round(r.get("xu", 0))), int(round(r.get("yu", 0))))
+
+    # İdeal ızgara (Yeşil)
     for r in results:
         pt = r["ideal_pt"]
         for d_row, d_col in [(0, 1), (1, 0)]:
             neighbor = point_map.get((r["row"] + d_row, r["col"] + d_col))
-            if neighbor is not None:
+            if neighbor is not None and "ideal_pt" in neighbor:
                 cv2.line(composite_color, pt, neighbor["ideal_pt"], (0, 255, 0), 1)
 
+    # Gerçek ölçülen ızgara (Sarı çizgiler, kırmızı artılar)
     for r in results:
         if np.isnan(r["xu"]): continue
         pt = (int(round(r["xu"])), int(round(r["yu"])))
@@ -540,7 +615,7 @@ def save_distortion_comparison(results, fit_params, img_shape, out_path):
                 cv2.line(composite_color, pt, pt2, (0, 255, 255), 1)
         cv2.drawMarker(composite_color, pt, (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1)
 
-    cv2.putText(composite_color, "Yesil=ideal (distorsiyonsuz)  Sari=olcum (gercek)",
+    cv2.putText(composite_color, "Yesil=ideal (distorsiyonsuz R,T)  Sari=olcum (gercek)",
                 (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2_imwrite_utf8(out_path, composite_color)
 
@@ -591,12 +666,14 @@ def main():
 
     try:
         fit_params = fit_camera_params(results)
-        print("\n=== KALİBRASYON SONUCU ===")
-        print(f"fx = {fit_params['fx']:.3f} | fy = {fit_params['fy']:.3f}")
-        print(f"cx = {fit_params['cx']:.3f} | cy = {fit_params['cy']:.3f}")
-        print(f"k1 = {fit_params['k1']:.6f} | k2 = {fit_params['k2']:.6f}")
-        print(f"p1 = {fit_params['p1']:.6f} | p2 = {fit_params['p2']:.6f}")
-        print(f"RMS = {fit_params['rms_px']:.4f} piksel")
+        print("\n=== KALİBRASYON SONUCU (R & T Extrinsic + Lens Distorsiyonu) ===")
+        print(f"fx = {fit_params['fx']:.2f} px | fy = {fit_params['fy']:.2f} px  (Manta G-419 + Basler 12mm teorik: ~2182 px)")
+        print(f"cx = {fit_params['cx']:.2f} px | cy = {fit_params['cy']:.2f} px  (Sensör merkezi: 1024, 1024)")
+        print(f"Rotasyon (Boresight Eğim Açısı): Pitch={fit_params['pitch_deg']:.2f}° | Yaw={fit_params['yaw_deg']:.2f}° | Roll={fit_params['roll_deg']:.2f}°")
+        print(f"Öteleme (Pinhole-Kamera Konumu): Tx={fit_params['tx_mm']:.1f} mm | Ty={fit_params['ty_mm']:.1f} mm | Tz={fit_params['tz_mm']:.1f} mm")
+        print(f"Radyal distorsiyon: k1 = {fit_params['k1']:.6f} | k2 = {fit_params['k2']:.6f}")
+        print(f"Tanjansiyel distorsiyon: p1 = {fit_params['p1']:.6f} | p2 = {fit_params['p2']:.6f}")
+        print(f"RMS Hatası = {fit_params['rms_px']:.4f} piksel")
         print(f"Kullanılan Temiz Nokta Sayısı: {fit_params['valid_points']}")
 
         if fit_params["k1"] < 0:
@@ -610,7 +687,8 @@ def main():
         with open(os.path.join(SAVE_DIR, "kalibrasyon_sonuc.csv"), "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             for k, v in fit_params.items():
-                writer.writerow([k, v])
+                if k != "full_params":
+                    writer.writerow([k, v])
 
     except RuntimeError as e:
         print(f"\nFit yapılamadı: {e}")
