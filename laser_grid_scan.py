@@ -458,7 +458,7 @@ def project(params, theta_x, theta_y):
     return xu, yu
 
 
-def fit_camera_params(results):
+def fit_camera_params(results, fix_focal_length=False):
     valid = [r for r in results if not np.isnan(r["xu"])]
     if len(valid) < 14:
         raise RuntimeError(f"Fit için yeterli geçerli nokta yok ({len(valid)} nokta var, R ve T modeli için en az 14 gerekir).")
@@ -478,24 +478,31 @@ def fit_camera_params(results):
         return np.concatenate([xm - xu_pred, ym - yu_pred])
 
     # Manta G-419 (2048x2048, 5.5 um) + Basler 12mm f/2.0 Lens:
-    # Teorik odak uzaklığı: fx_teorik = 12 / 0.0055 ≈ 2182 piksel.
+    # Teorik odak uzaklığı: fx_teorik = 12 / 0.0055 ~ 2182 piksel.
     # [fx, fy, cx, cy, k1, k2, p1, p2, rx, ry, rz, tx, ty, tz]
+    fx_init = 2252.0 if fix_focal_length else 2182.0
+    fy_init = -2252.0 if fix_focal_length else -2182.0
     x0 = [
-        2182.0, -2182.0, 1024.0, 1024.0,   # Odak ve optik merkez
+        fx_init, fy_init, 1024.0, 1024.0,   # Odak ve optik merkez
         0.0, 0.0, 0.0, 0.0,                # k1, k2, p1, p2
         0.0, 0.0, 0.0,                     # rx, ry, rz (Rotasyon)
         0.0, 0.0, 0.0                      # tx, ty, tz (mm sapma)
     ]
 
     # Fiziksel parametre sınırları
+    fx_min = 2240.0 if fix_focal_length else 800.0
+    fx_max = 2260.0 if fix_focal_length else 4000.0
+    fy_min = -2260.0 if fix_focal_length else -4000.0
+    fy_max = -2240.0 if fix_focal_length else -800.0
+    
     lower = [
-        800.0, -4000.0, 700.0, 700.0,
+        fx_min, fy_min, 700.0, 700.0,
         -5.0, -10.0, -0.05, -0.05,
         -np.pi/4, -np.pi/4, -np.pi/4,
         -60.0, -60.0, -60.0
     ]
     upper = [
-        4000.0, -800.0, 1350.0, 1350.0,
+        fx_max, fy_max, 1350.0, 1350.0,
         5.0, 10.0, 0.05, 0.05,
         np.pi/4, np.pi/4, np.pi/4,
         60.0, 60.0, 60.0
@@ -628,6 +635,44 @@ def save_csv(results, out_path):
         writer.writeheader()
         for r in results:
             writer.writerow({k: r.get(k, "") for k in fieldnames})
+
+
+def calibrate_from_csv(csv_path, fix_focal_length=False):
+    """
+    Daha önce kaydedilmiş bir sonuclar.csv dosyasından kalibrasyon fitini
+    donanıma bağlanmaya gerek kalmadan tekrar çalıştırır ve raporlar.
+    """
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = list(csv.DictReader(f))
+    
+    results = []
+    for r in reader:
+        xu_val = float(r['xu']) if r['xu'] and r['xu'] != 'nan' else float('nan')
+        yu_val = float(r['yu']) if r['yu'] and r['yu'] != 'nan' else float('nan')
+        results.append({
+            'label': r.get('label', ''),
+            'mm_x': float(r['mm_x']),
+            'mm_y': float(r['mm_y']),
+            'row': int(r.get('row', 0)),
+            'col': int(r.get('col', 0)),
+            'xu': xu_val,
+            'yu': yu_val,
+            'status': r.get('status', 'OK')
+        })
+
+    fit_params = fit_camera_params(results, fix_focal_length=fix_focal_length)
+    opt_dist_pct = (fit_params['k1'] * 0.412 + fit_params['k2'] * (0.412**2)) * 100
+    
+    print("\n=== ÇEVRİMDIŞI KALİBRASYON SONUCU ===")
+    print(f"fx = {fit_params['fx']:.2f} px | fy = {fit_params['fy']:.2f} px  (Basler 12mm nominal: 2252 px)")
+    print(f"cx = {fit_params['cx']:.2f} px | cy = {fit_params['cy']:.2f} px  (Sensör merkezi: 1024, 1024)")
+    print(f"Boresight Açıları: Pitch={fit_params['pitch_deg']:.2f}° | Yaw={fit_params['yaw_deg']:.2f}° | Roll={fit_params['roll_deg']:.2f}°")
+    print(f"Pinhole Konum Sapması: Tx={fit_params['tx_mm']:.2f} mm | Ty={fit_params['ty_mm']:.2f} mm | Tz={fit_params['tz_mm']:.2f} mm")
+    print(f"Radyal Distorsiyon: k1 = {fit_params['k1']:.6f} | k2 = {fit_params['k2']:.6f}")
+    print(f"Tanjansiyel Distorsiyon: p1 = {fit_params['p1']:.6f} | p2 = {fit_params['p2']:.6f}")
+    print(f"RMS Hatası = {fit_params['rms_px']:.4f} piksel")
+    print(f"Hesaplanan Köşe Optik Distorsiyonu (%) = {opt_dist_pct:.2f}%  (Basler Katalog Hedefi: -3.10% | k1 ~ -0.075)")
+    return fit_params
 
 
 # ---------------------------------------------------------------
