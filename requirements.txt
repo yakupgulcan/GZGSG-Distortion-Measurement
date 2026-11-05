@@ -1,0 +1,13 @@
+# GZGSG Distorsiyon Ölçümü ve Kamera Kalibrasyonu Gereksinimleri
+
+# Görüntü İşleme & Bilimsel Hesaplama
+numpy>=1.24.0
+opencv-python>=4.8.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Donanım & İletişim (Marlin USB / Gimbal & Allied Vision Vimba Kamera)
+pyserial>=3.5
+vmbpy>=1.2.0

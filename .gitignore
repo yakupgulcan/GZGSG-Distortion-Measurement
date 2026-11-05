@@ -1,5 +1,14 @@
 olcum*/
 
+# MS Office / Word / PowerPoint geçici kilit dosyaları
+~$*
+.~lock.*
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -12,6 +12,28 @@ Bu depo, lazer donanımlı bir gimbal (pan-tilt) sistemi kullanarak yüksek doğ
 
 Bu proje, özellikle optik fıçı (barrel) veya yastık (pincushion) tipi distorsiyonun tamamen ortadan kaldırılmasının kritik önem taşıdığı sistemler için değerlidir: **star tracker** (yıldız izleyici) sistemleri, bilgisayarla görü (computer vision) tabanlı konumlandırma sistemleri ve havacılık/savunma sanayii görüntüleme uygulamaları.
 
+## 📁 Proje Yapısı
+
+```text
+GZGSG-Distortion-Measurement/
+├── laser_grid_scan.py              # Güncel ana tarama, akıllı takip ve kalibrasyon betiği
+├── find_center.py                  # Lazer difraksiyon ve merkez konumu analiz betiği
+├── test_measurement_error.py       # Ölçüm tekrarlanabilirliği ve hata analiz betiği
+├── gimbal_system_visualization.py  # Gimbal hareket zarfını 3B modelleyen görselleştirici
+├── requirements.txt                # Gerekli Python bağımlılıkları listesi
+├── docs/                           # Proje raporları ve sunumlar
+│   ├── HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf
+│   ├── Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx
+│   ├── Checkerboard_Kalibrasyon_Sunum.pptx
+│   ├── Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx
+│   └── HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx
+├── data/                           # Örnek ve ham ölçüm CSV dosyaları
+│   ├── sonuclar.csv
+│   └── sonuclar-1.csv
+├── results/                        # Analiz grafikleri ve karşılaştırma çıktıları
+└── archive/                        # Önceki iterasyonlar ve deneysel kod arşivleri
+```
+
 ## 🚀 Özellikler
 
 - **Otomatik Gimbal Taraması:** İstenilen boyutta ($N \times M$) ızgara tarama rotası otomatik olarak oluşturulur ve baştan sona kullanıcı müdahalesi gerektirmeden yürütülür. Izgara boyutu (`GRID_SIZE_X`, `GRID_SIZE_Y`) ve fiziksel sınırlar (`SAFE_LIMIT_X`, `SAFE_LIMIT_Y`) kod başında kolayca ayarlanabilir.
@@ -55,22 +77,26 @@ Sistem, gimbal'in fiziksel açılarını (azimut ve elevasyon) kameranın görü
 
 Betik, ölçülen lazer piksel koordinatlarını `scipy.optimize.least_squares` fonksiyonuna besleyerek $f_x, f_y, c_x, c_y, k_1, k_2, p_1, p_2$ değerlerini tersine mühendislikle bulur.
 
-## Kullanım
+## Kurulum ve Kullanım
 
-1. Lazeri ve kamerayı gimbal üzerine monte edin ve düz bir projeksiyon duvarına yönlendirin.
-2. `laser_grid_scan.py` dosyası içindeki `PORT` ve `BAUD` ayarlarını donanımınıza göre güncelleyin.
-3. İstediğiniz ızgara boyutunu ve fiziksel sınırları ayarlayın:
+1. Gerekli Python paketlerini yükleyin:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Lazeri ve kamerayı gimbal üzerine monte edin ve düz bir projeksiyon duvarına yönlendirin.
+3. `laser_grid_scan.py` dosyası içindeki `PORT` ve `BAUD` ayarlarını donanımınıza göre güncelleyin.
+4. İstediğiniz ızgara boyutunu ve fiziksel sınırları ayarlayın:
    ```python
    GRID_SIZE_X = 7      # X eksenindeki nokta sayısı
    GRID_SIZE_Y = 7      # Y eksenindeki nokta sayısı
    SAFE_LIMIT_X = 80.0  # Güvenli X sınırı (mm)
    SAFE_LIMIT_Y = 30.0  # Güvenli Y sınırı (mm)
    ```
-4. Betiği çalıştırın:
+5. Betiği çalıştırın:
    ```bash
    python laser_grid_scan.py
    ```
-5. Betik otomatik olarak zaman damgalı bir klasör oluşturur (örn. `olcum_7x7_tarih_...`) ve şunları içerir:
+6. Betik otomatik olarak zaman damgalı bir klasör oluşturur (örn. `olcum_7x7_tarih_...`) ve şunları içerir:
    - Yakalanan ham `.png` görüntü kareleri
    - Ham koordinat eşlemelerini içeren `sonuclar.csv`
    - Nihai kalibrasyon parametrelerini içeren `kalibrasyon_sonuc.csv`
@@ -81,14 +107,13 @@ Betik, ölçülen lazer piksel koordinatlarını `scipy.optimize.least_squares` 
 
 Betik, Windows'ta OpenCV'nin Unicode (ASCII dışı) karakter içeren klasör adlarına görüntü kaydedememesi hatasını aşmak için özel bir `cv2_imwrite_utf8` sarmalayıcı fonksiyon içerir.
 
-## 📄 Raporlar ve Dokümantasyon
+## 📄 Raporlar ve Dokümantasyon (`docs/`)
 
-- **`Gimbal_Distorsiyon_Detaylı_Proje_Raporu.docx`** — Projenin tam ve güncel raporu. Checkerboard tabanlı başlangıç kalibrasyonunu ve gimbal + lazer tarama yöntemini uçtan uca belgeler.
-- **`Checkerboard_Kalibrasyon_Sunum.pptx`** — Gimbal tabanlı sisteme geçilmeden önce kullanılan klasik satranç tahtası (Zhang yöntemi) kalibrasyonunu anlatan sunum.
-- **`Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`** — Gimbal tabanlı distorsiyon ölçüm düzeneğinin genel hatlarını anlatan sunum: kullanılan cihazlar, alınan ölçümler ve öneriler.
-- **`HeNe_lazer_sonrası_ve_karsilasilan_hatalar.pptx`** — Sistemsel hatanın olası kaynakları, yapılabilecek değişiklikler ve HeNe lazerine geçiş. Hazırlayanlar: Ece Salman & Ekin Naz Partal.
-- **`HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`** — HeNe 30989 ile fiber optik kuplaj ve ışın profillerinin (Gaussian, top-hat, donut) incelenmesi; M44L01 (multimode) ve P1-630A-FC-2 (single-mode) fiber karşılaştırması ve laboratuvar uygulama planı.
-- **`gimbal_system_visualization.py`** — Gimbal'in hareket aralığını 3 boyutlu olarak çizen prototip betik.
+- **[`docs/Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx`](docs/Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx)** — Projenin tam ve güncel raporu. Checkerboard tabanlı başlangıç kalibrasyonunu ve gimbal + lazer tarama yöntemini uçtan uca belgeler.
+- **[`docs/Checkerboard_Kalibrasyon_Sunum.pptx`](docs/Checkerboard_Kalibrasyon_Sunum.pptx)** — Gimbal tabanlı sisteme geçilmeden önce kullanılan klasik satranç tahtası (Zhang yöntemi) kalibrasyonunu anlatan sunum.
+- **[`docs/Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`](docs/Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx)** — Gimbal tabanlı distorsiyon ölçüm düzeneğinin genel hatlarını anlatan sunum: kullanılan cihazlar, alınan ölçümler ve öneriler.
+- **[`docs/HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx`](docs/HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx)** — Sistemsel hatanın olası kaynakları, yapılabilecek değişiklikler ve HeNe lazerine geçiş. Hazırlayanlar: Ece Salman & Ekin Naz Partal.
+- **[`docs/HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`](docs/HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf)** — HeNe 30989 ile fiber optik kuplaj ve ışın profillerinin (Gaussian, top-hat, donut) incelenmesi; M44L01 (multimode) ve P1-630A-FC-2 (single-mode) fiber karşılaştırması ve laboratuvar uygulama planı.
 
 ---
 
@@ -103,6 +128,28 @@ Betik, Windows'ta OpenCV'nin Unicode (ASCII dışı) karakter içeren klasör ad
 This repository contains an advanced **Opto-Mechanical Camera Calibration and Lens Distortion Measurement** system. It is designed to extract highly accurate intrinsic camera parameters ($f_x, f_y, c_x, c_y$) and distortion coefficients (Radial $k_1, k_2$ and Tangential $p_1, p_2$) using a laser-equipped gimbal system.
 
 This project is particularly useful for high-precision optical systems such as **Star Trackers**, Computer Vision localization systems, and aerospace/defense imaging applications where eliminating optical barrel/pincushion distortion is mission-critical.
+
+## 📁 Repository Structure
+
+```text
+GZGSG-Distortion-Measurement/
+├── laser_grid_scan.py              # Main active scanning, adaptive tracking & calibration script
+├── find_center.py                  # Laser diffraction and spot centroid analysis script
+├── test_measurement_error.py       # Repeatability and measurement error analysis script
+├── gimbal_system_visualization.py  # 3D interactive visualizer for gimbal motion envelope
+├── requirements.txt                # Required Python dependencies
+├── docs/                           # Project reports and presentations
+│   ├── HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf
+│   ├── Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx
+│   ├── Checkerboard_Kalibrasyon_Sunum.pptx
+│   ├── Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx
+│   └── HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx
+├── data/                           # Sample and raw measurement CSVs
+│   ├── sonuclar.csv
+│   └── sonuclar-1.csv
+├── results/                        # Analysis plots and comparison artifacts
+└── archive/                        # Previous script versions and experimental archives
+```
 
 ## 🚀 Features
 
@@ -147,22 +194,26 @@ The system maps the physical angles of the gimbal (Azimuth & Elevation) into the
 
 The script feeds the measured laser pixel coordinates into `scipy.optimize.least_squares` to reverse-engineer the variables ($f_x, f_y, c_x, c_y, k_1, k_2, p_1, p_2$).
 
-## Usage
+## Setup & Usage
 
-1. Mount the laser and camera on the gimbal and face a flat projection wall.
-2. Update the `PORT` and `BAUD` settings in `laser_grid_scan.py`.
-3. Set your desired grid size and physical limits:
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. Mount the laser and camera on the gimbal and face a flat projection wall.
+3. Update the `PORT` and `BAUD` settings in `laser_grid_scan.py`.
+4. Set your desired grid size and physical limits:
    ```python
    GRID_SIZE_X = 7      # Number of points along X
    GRID_SIZE_Y = 7      # Number of points along Y
    SAFE_LIMIT_X = 80.0  # Safe X boundary (mm)
    SAFE_LIMIT_Y = 30.0  # Safe Y boundary (mm)
    ```
-4. Run the script:
+5. Run the script:
    ```bash
    python laser_grid_scan.py
    ```
-5. The script will automatically create a uniquely timestamped directory (e.g., `olcum_7x7_tarih_...`) containing:
+6. The script will automatically create a uniquely timestamped directory (e.g., `olcum_7x7_tarih_...`) containing:
    - Captured raw `.png` frames
    - `sonuclar.csv` with raw coordinate mappings
    - `kalibrasyon_sonuc.csv` with the final intrinsic matrix and distortion array
@@ -173,14 +224,13 @@ The script feeds the measured laser pixel coordinates into `scipy.optimize.least
 
 The script includes a custom `cv2_imwrite_utf8` wrapper function to bypass a known OpenCV C++ bug on Windows that prevents saving images to directories containing Unicode (Non-ASCII) characters.
 
-## 📄 Reports & Documentation
+## 📄 Reports & Documentation (`docs/`)
 
-- **`Gimbal_Distorsiyon_Detaylı_Proje_Raporu.docx`** — The full, up-to-date project report documenting the complete calibration methodology end-to-end.
-- **`Checkerboard_Kalibrasyon_Sunum.pptx`** — Presentation covering the classical checkerboard (Zhang's method) calibration used before the gimbal-based system.
-- **`Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`** — General overview of the gimbal-based distortion measurement setup.
-- **`HeNe_lazer_sonrası_ve_karsilasilan_hatalar.pptx`** — Systematic error analysis and the switch to a HeNe laser. Prepared by Ece Salman & Ekin Naz Partal.
-- **`HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`** — Technical report on HeNe 30989 fiber optical coupling and beam profile characterization (Gaussian, top-hat, donut modes), comparing M44L01 multimode and P1-630A-FC-2 single-mode fibers with laboratory implementation plan.
-- **`gimbal_system_visualization.py`** — A prototype script that plots the gimbal's 3D motion range.
+- **[`docs/Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx`](docs/Gimbal_Distorsiyon_Detayli_Proje_Raporu.docx)** — The full, up-to-date project report documenting the complete calibration methodology end-to-end.
+- **[`docs/Checkerboard_Kalibrasyon_Sunum.pptx`](docs/Checkerboard_Kalibrasyon_Sunum.pptx)** — Presentation covering the classical checkerboard (Zhang's method) calibration used before the gimbal-based system.
+- **[`docs/Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx`](docs/Gimbal_Kalibrasyon_genel_perspektif_Sunum.pptx)** — General overview of the gimbal-based distortion measurement setup.
+- **[`docs/HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx`](docs/HeNe_lazer_sonrasi_ve_karsilasilan_hatalar.pptx)** — Systematic error analysis and the switch to a HeNe laser. Prepared by Ece Salman & Ekin Naz Partal.
+- **[`docs/HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf`](docs/HeNe_Fiber_Kuplaj_Teknik_Rapor.pdf)** — Technical report on HeNe 30989 fiber optical coupling and beam profile characterization (Gaussian, top-hat, donut modes), comparing M44L01 multimode and P1-630A-FC-2 single-mode fibers with laboratory implementation plan.
 
 ---
 
